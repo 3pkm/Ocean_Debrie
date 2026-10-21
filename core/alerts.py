@@ -57,17 +57,20 @@ def format_alert_payload(
     patch_id: str,
     zone_name: str,
     tier: str,
-    p_reach: float,
-    eta_p10: Optional[datetime],
-    eta_p90: Optional[datetime],
-    scene_id: str,
+    p_reach: float = 0.0,
+    eta_p10: Optional[datetime] = None,
+    eta_p90: Optional[datetime] = None,
+    scene_id: str = "",
     patch_status: str = "active",
     last_observed_utc: Optional[Union[datetime, str]] = None,
     dashboard_base_url: str = "https://ocean-debris.vercel.app",
+    probability: Optional[float] = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     """
     Format standard alert payload conforming to plan.md Section 9.7.
     """
+    prob = probability if probability is not None else p_reach
     arrival_window = [
         _format_iso(eta_p10),
         _format_iso(eta_p90),
@@ -80,7 +83,7 @@ def format_alert_payload(
         "patch_id": patch_id,
         "zone": zone_name,
         "tier": tier,
-        "probability": round(float(p_reach), 2),
+        "probability": round(float(prob), 2),
         "arrival_window_utc": arrival_window,
         "patch_status": patch_status,
         "last_observed_utc": last_obs_str,
@@ -110,8 +113,15 @@ def should_trigger_alert(
     if last_alert is None:
         return True
 
-    last_tier = last_alert.get("tier", "None")
-    last_p_reach = float(last_alert.get("p_reach", 0.0))
+    if isinstance(last_alert, str):
+        last_tier = last_alert
+        last_p_reach = 0.0
+    elif isinstance(last_alert, dict):
+        last_tier = last_alert.get("tier", "None")
+        last_p_reach = float(last_alert.get("p_reach", 0.0))
+    else:
+        last_tier = "None"
+        last_p_reach = 0.0
 
     current_rank = TIER_RANKS.get(current_tier, 0)
     last_rank = TIER_RANKS.get(last_tier, 0)

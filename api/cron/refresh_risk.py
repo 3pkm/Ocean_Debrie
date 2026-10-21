@@ -103,7 +103,7 @@ def run_refresh_risk(
         prev_tier = prev_alert.get("tier", "None") if prev_alert else "None"
         prev_p = prev_alert.get("p_reach", 0.0) if prev_alert else 0.0
 
-        if should_trigger_alert(curr_tier, curr_p, prev_tier, prev_p):
+        if should_trigger_alert(curr_tier, curr_p, prev_alert):
             patch_obj = next((p for p in patches if p.patch_id == patch_id), None)
             patch_status = patch_obj.status if patch_obj else "active"
             zone_obj = next((z for z in zones if z.get("zone_id") == zone_id), {})

@@ -243,7 +243,17 @@ class MetOceanField:
         synthetic_u_wind: float = 4.0,
         synthetic_v_wind: float = 1.5,
         time_series: Optional[Dict[str, np.ndarray]] = None,
+        **kwargs,
     ):
+        if "u_current" in kwargs:
+            synthetic_u_curr = kwargs["u_current"]
+        if "v_current" in kwargs:
+            synthetic_v_curr = kwargs["v_current"]
+        if "u_wind" in kwargs:
+            synthetic_u_wind = kwargs["u_wind"]
+        if "v_wind" in kwargs:
+            synthetic_v_wind = kwargs["v_wind"]
+
         self.is_synthetic = is_synthetic
         self.synthetic_u_curr = synthetic_u_curr
         self.synthetic_v_curr = synthetic_v_curr

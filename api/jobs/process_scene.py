@@ -62,6 +62,8 @@ def run_process_scene(
     scene_id: str,
     aoi_id: Optional[int] = None,
     bands: Optional[Dict[str, Any]] = None,
+    aoi_bounds: Optional[Tuple[float, float, float, float]] = None,
+    detections: Optional[List[Detection]] = None,
     scene_time: Optional[datetime] = None,
     job_id: Optional[int] = None,
     existing_patches: Optional[List[TrackedPatch]] = None,
@@ -91,54 +93,80 @@ def run_process_scene(
     logger.info(f"Starting pipeline for scene {scene_id} at {scene_time.isoformat()}")
 
     try:
-        # 1. Preprocessing
-        if bands is None:
-            # Synthetic fallback if no raw bands passed
-            from core.preprocess import REQUIRED_BANDS
-            h, w = 256, 256
-            bands = {b: np.full((h, w), 0.05, dtype=np.float32) for b in REQUIRED_BANDS}
-            bands["B8"] = np.full((h, w), 0.06, dtype=np.float32)
-            bands["B6"] = np.full((h, w), 0.05, dtype=np.float32)
-            bands["B11"] = np.full((h, w), 0.05, dtype=np.float32)
-            bands["SCL"] = np.full((h, w), 6, dtype=np.uint8)  # Water
+        if detections is None:
+            # 1. Preprocessing
+            if bands is None:
+                from core.preprocess import REQUIRED_BANDS
+                h, w = 256, 256
+                bands = {b: np.full((h, w), 0.05, dtype=np.float32) for b in REQUIRED_BANDS}
+                bands["B8"] = np.full((h, w), 0.06, dtype=np.float32)
+                bands["B6"] = np.full((h, w), 0.05, dtype=np.float32)
+                bands["B11"] = np.full((h, w), 0.05, dtype=np.float32)
+                bands["SCL"] = np.full((h, w), 6, dtype=np.uint8)  # Water
 
-        prep_scene = preprocess_scene(bands, scale_reflectance=False)
+            prep_scene = preprocess_scene(bands, aoi_bounds=aoi_bounds, scale_reflectance=False)
 
-        # 2. Inference
-        prob_map = run_debris_inference(
-            prep_scene.bands,
-            session=inference_session,
-        )
-
-        # 3. Polygon extraction
-        obs_dicts = extract_debris_polygons(
-            debris_prob=prob_map,
-            water_mask=prep_scene.water_mask,
-            cloud_mask=prep_scene.cloud_mask,
-            fdi=prep_scene.ndwi,  # proxy/calculated FDI
-            transform=prep_scene.transform,
-            crs=prep_scene.crs,
-            scene_id=scene_id,
-            threshold=DEBRIS_PROB_THRESHOLD,
-        )
-
-        # Convert to Detection objects
-        detections: List[Detection] = []
-        for i, o in enumerate(obs_dicts):
-            det = Detection(
-                centroid=(o["centroid"]["coordinates"][0], o["centroid"]["coordinates"][1]),
-                area_m2=float(o["area_m2"]),
-                geom=o["geom"],
-                obs_id=i + 1,
-                confidence=float(o.get("confidence", 1.0)),
-                mean_fdi=float(o.get("mean_fdi", 0.0)),
-                cloud_overlap=float(o.get("cloud_overlap", 0.0)),
-                scene_id=scene_id,
+            # 2. Inference
+            prob_map = run_debris_inference(
+                prep_scene.bands,
+                session=inference_session,
             )
-            detections.append(det)
+
+            # 3. Polygon extraction
+            obs_dicts = extract_debris_polygons(
+                debris_prob=prob_map,
+                water_mask=prep_scene.water_mask,
+                cloud_mask=prep_scene.cloud_mask,
+                fdi=prep_scene.ndwi,  # proxy/calculated FDI
+                transform=prep_scene.transform,
+                crs=prep_scene.crs,
+                scene_id=scene_id,
+                threshold=DEBRIS_PROB_THRESHOLD,
+            )
+
+            # Convert to Detection objects
+            detections = []
+            for i, o in enumerate(obs_dicts):
+                det = Detection(
+                    centroid=(o["centroid"]["coordinates"][0], o["centroid"]["coordinates"][1]),
+                    area_m2=float(o["area_m2"]),
+                    geom=o["geom"],
+                    obs_id=i + 1,
+                    confidence=float(o.get("confidence", 1.0)),
+                    mean_fdi=float(o.get("mean_fdi", 0.0)),
+                    cloud_overlap=float(o.get("cloud_overlap", 0.0)),
+                    scene_id=scene_id,
+                )
+                detections.append(det)
+        else:
+            obs_dicts = [
+                {
+                    "centroid": {"type": "Point", "coordinates": list(d.centroid)},
+                    "area_m2": d.area_m2,
+                    "geom": d.geom,
+                    "obs_id": d.obs_id or (i + 1),
+                    "confidence": d.confidence,
+                    "mean_fdi": d.mean_fdi,
+                    "cloud_overlap": d.cloud_overlap,
+                }
+                for i, d in enumerate(detections)
+            ]
+            if bands is not None:
+                prep_scene = preprocess_scene(bands, aoi_bounds=aoi_bounds, scale_reflectance=False)
+            else:
+                prep_scene = None
 
         # 4. Tracking
         candidate_patches = list(existing_patches) if existing_patches is not None else []
+        if existing_forecasts:
+            for p in candidate_patches:
+                if p.patch_id in existing_forecasts:
+                    fc = existing_forecasts[p.patch_id]
+                    if p.ensemble_particles is None and fc.particles_at_scene is not None:
+                        p.ensemble_particles = fc.particles_at_scene
+                    if p.p90_geom is None and fc.p90_geom is not None:
+                        p.p90_geom = fc.p90_geom
+
         tracking_res = track_scene_detections(
             patches=candidate_patches,
             detections=detections,
@@ -148,12 +176,12 @@ def run_process_scene(
 
         # 5. Cloud Status for unassigned patches
         cloud_events = []
+        cloud_mask = prep_scene.cloud_mask if prep_scene is not None else None
         for p in tracking_res.unmatched_patches:
-            # Determine visibility from cloud mask
             evs = evaluate_unmatched_patch_status(
                 patch=p,
                 scene_time=scene_time,
-                cloud_mask=prep_scene.cloud_mask,
+                cloud_mask=cloud_mask,
                 scene_id=scene_id,
             )
             cloud_events.extend(evs)
@@ -271,7 +299,7 @@ def run_process_scene(
             prev_tier = prev_alert.get("tier", "None") if prev_alert else "None"
             prev_p = prev_alert.get("p_reach", 0.0) if prev_alert else 0.0
 
-            if should_trigger_alert(curr_tier, curr_p, prev_tier, prev_p):
+            if should_trigger_alert(curr_tier, curr_p, prev_alert):
                 # Find patch status and matching zone info
                 patch_obj = next(
                     (p for p in candidate_patches if p.patch_id == patch_id),
