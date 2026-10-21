@@ -6,14 +6,27 @@ and records pending alerts in the alerts table.
 """
 
 import json
+import hashlib
+import hmac
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Union
 
+import requests
+
 from core.config import (
     ALERT_MIN_PROB_DELTA,
+    EMAIL_API_KEY,
+    EMAIL_FROM,
+    EMAIL_PROVIDER,
+    EMAIL_TO,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_CHAT_ID,
     ZONE_DEFAULT_ADVISORY,
     ZONE_DEFAULT_WARNING,
+    WEBHOOK_SIGNING_KEY,
+    WEBHOOK_URL,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,6 +40,293 @@ TIER_RANKS = {
     "Warning": 2,
     "warning": 2,
 }
+
+DELIVERY_TIMEOUT_SECONDS = 10
+MAX_DELIVERY_ATTEMPTS = 3
+MAX_RETRY_DELAY_SECONDS = 60 * 60
+
+
+class AlertDeliveryError(RuntimeError):
+    """A configured alert channel did not accept its delivery."""
+
+
+def webhook_signature(
+    payload: Union[Dict[str, Any], bytes, str],
+    signing_key: Optional[str] = None,
+) -> str:
+    """Return the SHA-256 HMAC header value for a serialized webhook payload."""
+    if isinstance(payload, dict):
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    elif isinstance(payload, str):
+        body = payload.encode("utf-8")
+    else:
+        body = payload
+    signature = hmac.new(
+        (signing_key or WEBHOOK_SIGNING_KEY).encode("utf-8"), body, hashlib.sha256
+    ).hexdigest()
+    return f"sha256={signature}"
+
+
+def _post(
+    url: str,
+    *,
+    json_body: Optional[Dict[str, Any]] = None,
+    raw_body: Optional[bytes] = None,
+    headers: Optional[Dict[str, str]] = None,
+):
+    """POST an alert to a provider without leaking response contents or credentials."""
+    try:
+        response = requests.post(
+            url,
+            json=json_body if raw_body is None else None,
+            data=raw_body,
+            headers=headers,
+            timeout=DELIVERY_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response
+    except requests.RequestException as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        detail = f" (HTTP {status})" if status else ""
+        raise AlertDeliveryError(f"Provider request failed{detail}") from None
+
+
+def _telegram_message(payload: Dict[str, Any]) -> str:
+    arrival = payload.get("arrival_window_utc") or ["", ""]
+    if not isinstance(arrival, (list, tuple)):
+        arrival = ["", ""]
+    start = html.escape(str(arrival[0]) if arrival else "")
+    end = html.escape(str(arrival[1]) if len(arrival) > 1 else "")
+    return (
+        f"<b>Ocean debris {html.escape(str(payload.get('tier', 'Alert')))}</b>\n"
+        f"Patch: <code>{html.escape(str(payload.get('patch_id', '')))}</code>\n"
+        f"Zone: {html.escape(str(payload.get('zone', '')))}\n"
+        f"Probability: {html.escape(str(payload.get('probability', '')))}\n"
+        f"Arrival window (UTC): {start} – {end}\n"
+        f"Status: {html.escape(str(payload.get('patch_status', '')))}\n"
+        f'<a href="{html.escape(str(payload.get("dashboard_url", "")), quote=True)}">Open dashboard</a>'
+    )
+
+
+def send_telegram_alert(
+    payload: Dict[str, Any], chat_id: Optional[str] = None
+) -> None:
+    """Send an alert through the Telegram Bot API."""
+    recipient = chat_id or TELEGRAM_CHAT_ID
+    if not TELEGRAM_BOT_TOKEN or not recipient:
+        raise AlertDeliveryError("Telegram delivery is not fully configured")
+    response = _post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        json_body={
+            "chat_id": recipient,
+            "text": _telegram_message(payload),
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        },
+    )
+    try:
+        if response.json().get("ok") is False:
+            raise AlertDeliveryError("Telegram rejected the alert")
+    except (ValueError, AttributeError):
+        raise AlertDeliveryError("Telegram returned an invalid response") from None
+
+
+def send_webhook_alert(
+    payload: Dict[str, Any],
+    url: Optional[str] = None,
+    signing_key: Optional[str] = None,
+) -> None:
+    """Send JSON to the configured webhook with an HMAC-SHA256 signature."""
+    destination = url or WEBHOOK_URL
+    secret = signing_key or WEBHOOK_SIGNING_KEY
+    if not destination or not secret:
+        raise AlertDeliveryError("Webhook delivery is not fully configured")
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    _post(
+        destination,
+        raw_body=body.encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Signature": webhook_signature(body, secret),
+        },
+    )
+
+
+def _email_recipients(override: Any = None) -> list[str]:
+    recipients = override if override is not None else EMAIL_TO
+    if isinstance(recipients, str):
+        return [address.strip() for address in recipients.split(",") if address.strip()]
+    if isinstance(recipients, list):
+        return [
+            address.strip()
+            for address in recipients
+            if isinstance(address, str) and address.strip()
+        ]
+    return []
+
+
+def send_email_alert(payload: Dict[str, Any], to: Any = None) -> None:
+    """Send an HTML alert using the configured Resend or SendGrid HTTP API."""
+    recipients = _email_recipients(to)
+    if not EMAIL_API_KEY or not EMAIL_FROM or not recipients:
+        raise AlertDeliveryError("Email delivery is not fully configured")
+
+    patch_id = html.escape(str(payload.get("patch_id", "")))
+    tier = html.escape(str(payload.get("tier", "Alert")))
+    dashboard_url = html.escape(str(payload.get("dashboard_url", "")), quote=True)
+    fields = {
+        "zone": payload.get("zone", ""),
+        "probability": payload.get("probability", ""),
+        "arrival_window_utc": payload.get("arrival_window_utc", ["", ""]),
+        "patch_status": payload.get("patch_status", ""),
+    }
+    details = "".join(
+        f"<li><strong>{html.escape(str(name).replace('_', ' ').title())}:</strong> "
+        f"{html.escape(json.dumps(value) if isinstance(value, (list, dict)) else str(value))}</li>"
+        for name, value in fields.items()
+    )
+    message_html = (
+        f"<h2>Ocean debris {tier}</h2><p>Patch: {patch_id}</p>"
+        f"<ul>{details}</ul><p><a href=\"{dashboard_url}\">Open dashboard</a></p>"
+    )
+    subject = " ".join(
+        f"Ocean debris {payload.get('tier', 'alert')}: {payload.get('patch_id', '')}".splitlines()
+    )[:200]
+    provider = EMAIL_PROVIDER.strip().lower()
+    if provider == "resend":
+        url = "https://api.resend.com/emails"
+        body = {
+            "from": EMAIL_FROM,
+            "to": recipients,
+            "subject": subject,
+            "html": message_html,
+        }
+        headers = {"Authorization": f"Bearer {EMAIL_API_KEY}"}
+    elif provider == "sendgrid":
+        url = "https://api.sendgrid.com/v3/mail/send"
+        body = {
+            "personalizations": [{"to": [{"email": address} for address in recipients]}],
+            "from": {"email": EMAIL_FROM},
+            "subject": subject,
+            "content": [{"type": "text/html", "value": message_html}],
+        }
+        headers = {"Authorization": f"Bearer {EMAIL_API_KEY}"}
+    else:
+        raise AlertDeliveryError(f"Unsupported email provider: {provider}")
+    _post(url, json_body=body, headers=headers)
+
+
+_CHANNEL_SENDERS = {
+    "telegram": send_telegram_alert,
+    "webhook": send_webhook_alert,
+    "email": send_email_alert,
+}
+
+
+def _channel_options(channel_config: Any) -> Dict[str, Dict[str, Any]]:
+    """Normalize zone channel settings to provider-specific options."""
+    options: Dict[str, Dict[str, Any]] = {}
+    if isinstance(channel_config, list):
+        entries = channel_config
+    elif isinstance(channel_config, dict):
+        if any(
+            key in channel_config
+            for key in ("telegram_chat_id", "email", "webhook_url")
+        ):
+            entries = [
+                {
+                    "type": "telegram",
+                    "chat_id": channel_config.get("telegram_chat_id"),
+                },
+                {"type": "email", "to": channel_config.get("email")},
+                {
+                    "type": "webhook",
+                    "url": channel_config.get("webhook_url"),
+                    "secret": channel_config.get("webhook_secret"),
+                },
+            ]
+        else:
+            entries = [
+                {"type": name, **(value if isinstance(value, dict) else {})}
+                for name, value in channel_config.items()
+                if name in _CHANNEL_SENDERS
+            ]
+    else:
+        entries = []
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("type", "")).strip().lower()
+        if name == "telegram" and entry.get("chat_id"):
+            options[name] = {"chat_id": str(entry["chat_id"])}
+        elif name == "email" and entry.get("to"):
+            options[name] = {"to": entry["to"]}
+        elif name == "webhook" and entry.get("url") and entry.get("secret"):
+            options[name] = {
+                "url": str(entry["url"]),
+                "signing_key": str(entry["secret"]),
+            }
+    return options
+
+
+def _configured_channels(channel_config: Any = None) -> list[str]:
+    if channel_config:
+        return list(_channel_options(channel_config))
+    channels = []
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        channels.append("telegram")
+    if WEBHOOK_URL and WEBHOOK_SIGNING_KEY:
+        channels.append("webhook")
+    if EMAIL_API_KEY and EMAIL_FROM and _email_recipients():
+        channels.append("email")
+    return channels
+
+
+def resolve_delivery_channels(
+    channel: str = "all", channel_config: Any = None
+) -> list[str]:
+    """Return the distinct configured providers for an alert."""
+    requested = [
+        part.strip().lower()
+        for part in (channel or "all").split(",")
+        if part.strip()
+    ]
+    configured = _configured_channels(channel_config)
+    if not requested or "all" in requested:
+        requested = configured
+    elif channel_config:
+        requested = [name for name in requested if name in configured]
+    if not requested:
+        raise AlertDeliveryError("No alert delivery channels are configured")
+    return list(dict.fromkeys(requested))
+
+
+def deliver_alert(
+    payload: Dict[str, Any],
+    channel: str = "all",
+    channel_config: Any = None,
+) -> list[str]:
+    """Deliver an alert to one or more configured channels, failing if any fails."""
+    requested = resolve_delivery_channels(channel, channel_config)
+    options = _channel_options(channel_config)
+
+    delivered = []
+    for name in requested:
+        sender = _CHANNEL_SENDERS.get(name)
+        if sender is None:
+            raise AlertDeliveryError(f"Unsupported alert channel: {name}")
+        if channel_config and name in options:
+            sender(payload, **options[name])
+        else:
+            sender(payload)
+        delivered.append(name)
+    return delivered
+
+
+def retry_delay_seconds(attempt_number: int) -> int:
+    """Exponential retry delay, capped at one hour."""
+    return min(60 * (2 ** max(0, attempt_number - 1)), MAX_RETRY_DELAY_SECONDS)
 
 
 def generate_dedupe_key(

@@ -5,6 +5,7 @@ Provides connection pooling, transaction context managers, and job row-locking.
 
 import contextlib
 import logging
+import math
 from typing import Generator, Any, Optional, Dict
 from core.config import DATABASE_URL, DATABASE_URL_UNPOOLED
 
@@ -86,22 +87,26 @@ def lock_and_acquire_job(job_id: Optional[int] = None) -> Optional[Dict[str, Any
             if job_id is not None:
                 cur.execute(
                     """
-                    SELECT job_id, kind, scene_id, status, attempts
-                    FROM jobs
-                    WHERE job_id = %s AND status = 'queued'
-                    FOR UPDATE SKIP LOCKED;
+                    SELECT j.job_id, j.kind, j.scene_id, j.status, j.attempts,
+                           s.aoi_id
+                    FROM jobs AS j
+                    LEFT JOIN scenes AS s ON s.scene_id = j.scene_id
+                    WHERE j.job_id = %s AND j.status = 'queued'
+                    FOR UPDATE OF j SKIP LOCKED;
                     """,
                     (job_id,),
                 )
             else:
                 cur.execute(
                     """
-                    SELECT job_id, kind, scene_id, status, attempts
-                    FROM jobs
-                    WHERE status = 'queued'
-                    ORDER BY created_at ASC
+                    SELECT j.job_id, j.kind, j.scene_id, j.status, j.attempts,
+                           s.aoi_id
+                    FROM jobs AS j
+                    LEFT JOIN scenes AS s ON s.scene_id = j.scene_id
+                    WHERE j.status = 'queued'
+                    ORDER BY j.created_at ASC
                     LIMIT 1
-                    FOR UPDATE SKIP LOCKED;
+                    FOR UPDATE OF j SKIP LOCKED;
                     """
                 )
             job = cur.fetchone()
@@ -120,6 +125,7 @@ def lock_and_acquire_job(job_id: Optional[int] = None) -> Optional[Dict[str, Any
                 (job["job_id"],),
             )
             updated_job = cur.fetchone()
+            updated_job["aoi_id"] = job["aoi_id"]
             conn.commit()
             return updated_job
 
@@ -136,3 +142,92 @@ def finish_job(job_id: int, status: str = "done", error: Optional[str] = None) -
             """,
             (status, error, job_id),
         )
+
+
+def enqueue_scene_job(
+    scene_id: str,
+    aoi_id: Optional[int] = None,
+    sensing_time: Optional[Any] = None,
+    source: str = "api",
+    cloud_frac: float = 0.0,
+) -> Dict[str, Any]:
+    """Register a scene and atomically enqueue its existing process-scene job."""
+    if not scene_id or not scene_id.strip():
+        raise ValueError("scene_id is required.")
+    if not math.isfinite(cloud_frac) or not 0.0 <= cloud_frac <= 1.0:
+        raise ValueError("cloud_frac must be between 0 and 1.")
+    if psycopg is None:
+        raise RuntimeError("psycopg is not installed.")
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Serialize enqueue attempts for one scene even when callers race.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s)::bigint);",
+                (scene_id,),
+            )
+            cur.execute(
+                """
+                INSERT INTO scenes
+                    (scene_id, aoi_id, sensing_time, source, cloud_frac, status)
+                VALUES (%s, %s, %s, %s, %s, 'queued')
+                ON CONFLICT (scene_id) DO UPDATE SET
+                    aoi_id = COALESCE(scenes.aoi_id, EXCLUDED.aoi_id),
+                    sensing_time = COALESCE(scenes.sensing_time, EXCLUDED.sensing_time),
+                    source = COALESCE(scenes.source, EXCLUDED.source),
+                    cloud_frac = COALESCE(scenes.cloud_frac, EXCLUDED.cloud_frac);
+                """,
+                (scene_id, aoi_id, sensing_time, source, cloud_frac),
+            )
+            cur.execute(
+                """
+                SELECT job_id, status, attempts
+                FROM jobs
+                WHERE scene_id = %s AND kind = 'process_scene'
+                ORDER BY created_at DESC
+                LIMIT 1
+                FOR UPDATE;
+                """,
+                (scene_id,),
+            )
+            existing = cur.fetchone()
+            if existing:
+                status = existing["status"]
+                if status == "failed":
+                    if (existing["attempts"] or 0) >= 3:
+                        raise ValueError("The scene job has exhausted its retry limit.")
+                    cur.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'queued', locked_at = NULL, error = NULL
+                        WHERE job_id = %s
+                        RETURNING job_id, status;
+                        """,
+                        (existing["job_id"],),
+                    )
+                    job = cur.fetchone()
+                    return {
+                        "job_id": job["job_id"],
+                        "status": job["status"],
+                        "created": False,
+                    }
+                return {
+                    "job_id": existing["job_id"],
+                    "status": status,
+                    "created": False,
+                }
+
+            cur.execute(
+                """
+                INSERT INTO jobs (kind, scene_id, status)
+                VALUES ('process_scene', %s, 'queued')
+                RETURNING job_id, status;
+                """,
+                (scene_id,),
+            )
+            job = cur.fetchone()
+            return {
+                "job_id": job["job_id"],
+                "status": job["status"],
+                "created": True,
+            }

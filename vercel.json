@@ -6,6 +6,7 @@
   ],
   "functions": {
     "api/jobs/process_scene.py": { "maxDuration": 300 },
-    "api/cron/refresh_risk.py":  { "maxDuration": 300 }
+    "api/cron/refresh_risk.py":  { "maxDuration": 300 },
+    "api/cron/outbox.py":        { "maxDuration": 300 }
   }
 }

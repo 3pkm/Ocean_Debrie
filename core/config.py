@@ -13,15 +13,21 @@ DATABASE_URL_UNPOOLED = os.getenv("DATABASE_URL_UNPOOLED", "")
 BLOB_READ_WRITE_TOKEN = os.getenv("BLOB_READ_WRITE_TOKEN", "")
 MODEL_BLOB_URL = os.getenv("MODEL_BLOB_URL", "")
 
-INGEST_SECRET = os.getenv("INGEST_SECRET", "debris-dev-ingest-secret")
-CRON_SECRET = os.getenv("CRON_SECRET", "debris-dev-cron-secret")
+INGEST_SECRET = os.getenv("INGEST_SECRET", "")
+CRON_SECRET = os.getenv("CRON_SECRET", "")
+ZONE_API_KEY = os.getenv("ZONE_API_KEY", "")
 
 CDSE_USER = os.getenv("CDSE_USER", "")
 CDSE_PASSWORD = os.getenv("CDSE_PASSWORD", "")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 EMAIL_API_KEY = os.getenv("EMAIL_API_KEY", "")
-WEBHOOK_SIGNING_KEY = os.getenv("WEBHOOK_SIGNING_KEY", "debris-dev-webhook-key")
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "resend")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "")
+EMAIL_TO = os.getenv("EMAIL_TO", "")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+WEBHOOK_SIGNING_KEY = os.getenv("WEBHOOK_SIGNING_KEY", "")
 WORKER_URL = os.getenv("WORKER_URL", "")
 
 # 9.1 Preprocessing & Inference

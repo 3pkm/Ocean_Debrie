@@ -138,9 +138,13 @@ def run_refresh_risk(
                 "eta_start": r["eta_p10"],
                 "eta_end": r["eta_p90"],
                 "payload": payload,
+                "channel": "all",
                 "status": "pending",
+                "attempts": 0,
+                "next_attempt_at": datetime.now(timezone.utc),
             }
             generated_alerts.append(alert_record)
+            insert_alert(alert_record)
 
     return {
         "status": "success",

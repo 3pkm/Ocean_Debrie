@@ -29,6 +29,7 @@ from core.config import (
     DEBRIS_PROB_THRESHOLD,
     INGEST_SECRET,
 )
+from core.api_utils import is_authorized
 from core.db import get_db_connection, get_db_cursor, finish_job, lock_and_acquire_job
 from core.preprocess import PreprocessedScene, preprocess_scene
 from core.infer import run_debris_inference
@@ -338,9 +339,13 @@ def run_process_scene(
                     "eta_start": r["eta_p10"],
                     "eta_end": r["eta_p90"],
                     "payload": payload,
+                    "channel": "all",
                     "status": "pending",
+                    "attempts": 0,
+                    "next_attempt_at": datetime.now(timezone.utc),
                 }
                 generated_alerts.append(alert_record)
+                insert_alert(alert_record)
 
         # 10. Mark Job as Done if job_id provided
         if job_id is not None:
@@ -371,9 +376,7 @@ class handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         # 1. Verify Secret
-        auth_header = self.headers.get("Authorization", "")
-        secret = auth_header.replace("Bearer ", "").strip()
-        if secret not in (CRON_SECRET, INGEST_SECRET) and INGEST_SECRET != "debris-dev-ingest-secret":
+        if not is_authorized(self.headers, CRON_SECRET, INGEST_SECRET):
             self.send_response(401)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -396,6 +399,8 @@ class handler(BaseHTTPRequestHandler):
                 if locked_job:
                     scene_id = locked_job["scene_id"]
                     job_id = locked_job["job_id"]
+                    if aoi_id is None:
+                        aoi_id = locked_job.get("aoi_id")
                 else:
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
