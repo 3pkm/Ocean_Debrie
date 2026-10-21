@@ -112,7 +112,25 @@ function MapPanel({
     if (!containerRef.current || mapRef.current) return
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+      style: {
+        version: 8,
+        sources: {
+          'carto-dark': {
+            type: 'raster',
+            tiles: [
+              'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+              'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+              'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+            ],
+            tileSize: 256,
+            attribution: '© CARTO, © OpenStreetMap',
+          },
+        },
+        layers: [
+          { id: 'background', type: 'background', paint: { 'background-color': '#0c1417' } },
+          { id: 'carto-dark-tiles', type: 'raster', source: 'carto-dark', paint: { 'raster-opacity': 0.95 } },
+        ],
+      },
       center: replayLocation,
       zoom: 7.2,
       attributionControl: false,
@@ -120,9 +138,18 @@ function MapPanel({
     mapRef.current = map
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right')
+
     map.on('error', (event: any) => {
-      if (!mapReady) setMapError(event.error?.message ?? 'The map style or tiles could not be loaded.')
+      const msg = event?.error?.message ?? ''
+      // Suppress benign layer query and tile abort errors
+      if (msg.includes('patch-fill') || msg.includes('does not exist') || msg.includes('abort')) {
+        return
+      }
+      if (!mapReady && (msg.includes('style') || msg.includes('Failed to fetch'))) {
+        setMapError('The map style or tiles could not be loaded.')
+      }
     })
+
     map.on('load', () => {
       map.addSource('patches', { type: 'geojson', data: featureCollection([]) })
       map.addSource('lineage', { type: 'geojson', data: featureCollection([]) })
@@ -157,20 +184,28 @@ function MapPanel({
       map.addLayer({ id: 'draft-fill', type: 'fill', source: 'draft-zone', paint: { 'fill-color': '#34d399', 'fill-opacity': 0.18 } })
       map.addLayer({ id: 'draft-line', type: 'line', source: 'draft-zone', paint: { 'line-color': '#34d399', 'line-width': 2, 'line-dasharray': [2, 2] } })
       map.addLayer({ id: 'draft-points', type: 'circle', source: 'draft-zone', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#34d399', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } })
+
+      // Register mouse events only after layers exist
+      map.on('mouseenter', 'patch-fill', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'patch-fill', () => { map.getCanvas().style.cursor = handlersRef.current.drawing ? 'crosshair' : '' })
+
       setMapReady(true)
     })
+
     map.on('click', (event: any) => {
       const state = handlersRef.current
       if (state.drawing) {
         state.onMapCoordinate([event.lngLat.lng, event.lngLat.lat])
         return
       }
-      const features = map.queryRenderedFeatures(event.point, { layers: ['patch-fill', 'patch-outline', 'patch-points'] })
+      if (!map.isStyleLoaded()) return
+      const queryLayers = ['patch-fill', 'patch-outline', 'patch-points'].filter((id) => map.getLayer(id))
+      if (queryLayers.length === 0) return
+      const features = map.queryRenderedFeatures(event.point, { layers: queryLayers })
       const patchId = features[0]?.properties?.patch_id
       if (typeof patchId === 'string') state.onSelectPatch(patchId)
     })
-    map.on('mouseenter', 'patch-fill', () => { map.getCanvas().style.cursor = 'pointer' })
-    map.on('mouseleave', 'patch-fill', () => { map.getCanvas().style.cursor = handlersRef.current.drawing ? 'crosshair' : '' })
+
     return () => {
       map.remove()
       mapRef.current = null
