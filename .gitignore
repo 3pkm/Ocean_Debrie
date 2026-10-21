@@ -2,3 +2,9 @@
 /.venv
 /sql
 /tests
+/data
+*.pytest_cache
+/api/cron/__pycache__
+/core/__pycache__
+/api/jobs/__pycache__
+/jobs/__pycache__
