@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from 'maplibre-gl'
+import * as maplibregl from 'maplibre-gl'
+import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl'
 import {
   Activity, AlertTriangle, Anchor, ArrowDownRight, ArrowUpRight, CalendarClock, Check,
   ChevronRight, CircleHelp, Clock3, Cloud, Crosshair, ExternalLink, Layers3, LoaderCircle,
@@ -119,7 +120,7 @@ function MapPanel({
     mapRef.current = map
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right')
-    map.on('error', (event) => {
+    map.on('error', (event: any) => {
       if (!mapReady) setMapError(event.error?.message ?? 'The map style or tiles could not be loaded.')
     })
     map.on('load', () => {
@@ -158,7 +159,7 @@ function MapPanel({
       map.addLayer({ id: 'draft-points', type: 'circle', source: 'draft-zone', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#34d399', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } })
       setMapReady(true)
     })
-    map.on('click', (event) => {
+    map.on('click', (event: any) => {
       const state = handlersRef.current
       if (state.drawing) {
         state.onMapCoordinate([event.lngLat.lng, event.lngLat.lat])
@@ -269,6 +270,18 @@ function App() {
   const [replayEnabled, setReplayEnabled] = useState(false)
   const [replayStep, setReplayStep] = useState<ReplayStep>(0)
   const [replayNotice, setReplayNotice] = useState('')
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true)
+    const handleOffline = () => setIsOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true)
@@ -392,7 +405,6 @@ function App() {
     setSelectedId(first.patch_id)
     setReplayNotice(step === 2 ? 'Demo alert: drift forecast intersects the Kingstown Harbour warning zone.' : '')
   }
-  const timeline = detail?.timeline ?? detail?.events ?? []
   const records: VerificationRecord[] = verification?.records ?? []
   const verificationSummary = verification?.summary
 
@@ -401,6 +413,12 @@ function App() {
       <a className="brand" href="#" aria-label="Tidewatch home"><span className="brand-mark"><Waves size={17} /></span><span>TIDEWATCH</span><span className="brand-divider" /> <span className="brand-subtitle">MARINE DEBRIS INTELLIGENCE</span></a>
       <div className="top-actions"><span className="live-pill"><i /> Live monitoring</span><button className="icon-button" aria-label="Help"><CircleHelp size={17} /></button><div className="avatar">TW</div></div>
     </header>
+    {!isOnline && (
+      <aside className="offline-banner" role="status">
+        <AlertTriangle size={14} />
+        <span>You are offline — changes will sync once reconnected.</span>
+      </aside>
+    )}
     <section className="freshness-bar" aria-label="Data freshness">
       <div className="freshness-lead"><span className="status-led" /><span>System status <strong>{freshness ? 'Nominal' : 'Connecting'}</strong></span></div>
       <div className="freshness-item"><Satellite size={14} /><span>Sentinel-2 <b>{formatAge(freshness?.last_scene_age_hours)}</b></span></div>

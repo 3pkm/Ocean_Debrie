@@ -51,7 +51,8 @@ button { color: inherit; }
 .page-heading h1 { color: #f2f8f8; font-size: 26px; line-height: 1.2; letter-spacing: -.65px; font-weight: 650; margin: 7px 0 4px; }
 .page-heading p { color: #88989d; font-size: 12px; margin: 0; }
 .heading-actions { display: flex; gap: 9px; }
-.button { display: inline-flex; justify-content: center; align-items: center; gap: 7px; border: 1px solid transparent; height: 34px; padding: 0 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; transition: background .16s, border-color .16s; }
+.button { display: inline-flex; justify-content: center; align-items: center; gap: 7px; border: 1px solid transparent; height: 34px; padding: 0 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; transition: transform 75ms ease, background .16s, border-color .16s; }
+.button:active, .interactive-card:active { transform: scale(0.98); }
 .button:disabled { opacity: .58; cursor: not-allowed; }
 .button-primary { color: #062328; background: #27c5d8; border-color: #33cede; }
 .button-primary:hover:not(:disabled) { background: #56d5e2; }
@@ -69,6 +70,19 @@ button { color: inherit; }
 .action-message svg { color: #42d6a4; }
 .replay-alert { margin: -2px 30px 10px; color: #f6ce79; border-color: #705421; background: #28210e; }
 .replay-alert svg { color: #f5b738; }
+
+.offline-banner {
+  background: #271e0c;
+  color: #fbbf24;
+  border-bottom: 1px solid #785918;
+  padding: 8px 30px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.offline-banner svg { color: #f59e0b; flex-shrink: 0; }
 
 .replay-banner { margin: 0 30px 14px; border: 1px solid #55431a; border-radius: 8px; background: linear-gradient(100deg, #251e0d, #191a15); min-height: 55px; padding: 9px 12px; display: flex; align-items: center; gap: 20px; }
 .replay-title { min-width: 218px; display: flex; align-items: center; gap: 9px; }
@@ -88,7 +102,7 @@ button { color: inherit; }
 .metric-card.blue .metric-icon { color: #7ab8ff; background: #19283b; }
 .metric-card.purple .metric-icon { color: #bf9aff; background: #281f37; }
 .metric-label { color: #99a8ac; font-size: 10px; }
-.metric-value { color: #edf7f7; font-size: 22px; line-height: 1.22; font-weight: 650; margin-top: 2px; letter-spacing: -.5px; }
+.metric-value { color: #edf7f7; font-size: 22px; line-height: 1.22; font-weight: 650; margin-top: 2px; letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
 .metric-note { color: #728389; font-size: 9px; margin-top: 3px; }
 .metric-trend { position: absolute; top: 12px; right: 12px; color: #428e92; opacity: .8; }
 .metric-card.orange .metric-trend { color: #c18948; }
