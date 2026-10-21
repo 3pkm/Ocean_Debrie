@@ -1,4 +1,5 @@
 *.md
+!/README.md
 /.venv
 /sql
 !/sql/
@@ -24,3 +25,7 @@ api/zones/__pycache__
 /graphify-out
 .env
 *.pptx
+/model/__pycache__
+/model/weights/
+/scripts/generate_metric_graphs.py
+/scripts/verify_model.py
