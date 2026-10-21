@@ -19,7 +19,9 @@ type ReplayStep = 0 | 1 | 2
 type ZoneInput = { name: string; advisory: string; warning: string; chatId: string; email: string; webhook: string; secret: string; apiKey: string }
 
 const replayLocation: [number, number] = [-61.22, 13.14]
-const ndciTileUrl = import.meta.env.VITE_NDCI_TILE_URL
+const basemapTileUrl = import.meta.env.VITE_BASEMAP_TILE_URL || 'https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
+const ndciTileUrl = import.meta.env.VITE_NDCI_TILE_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+const defaultZoneApiKey = import.meta.env.VITE_ZONE_API_KEY ?? ''
 const fixturePatch = (id: string, status: Patch['status'], coords: [number, number][]): Patch => ({
   patch_id: id,
   status,
@@ -118,12 +120,10 @@ function MapPanel({
           'carto-dark': {
             type: 'raster',
             tiles: [
-              'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-              'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
-              'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+              basemapTileUrl,
             ],
             tileSize: 256,
-            attribution: '© CARTO, © OpenStreetMap',
+            attribution: '© Esri, © OpenStreetMap',
           },
         },
         layers: [
@@ -179,8 +179,8 @@ function MapPanel({
       map.addLayer({ id: 'lineage-direction', type: 'symbol', source: 'lineage', layout: { 'symbol-placement': 'line', 'text-field': '›', 'text-size': 14, 'text-allow-overlap': true, 'text-rotation-alignment': 'map' }, paint: { 'text-color': '#9eeaf0', 'text-halo-color': '#0c171b', 'text-halo-width': 1 } })
       map.addLayer({ id: 'patch-fill', type: 'fill', source: 'patches', filter: ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]], paint: { 'fill-color': ['match', ['get', 'status'], 'active', '#06b6d4', 'occluded', '#fbbf24', 'stranded', '#f97316', 'lost', '#a1a1aa', '#60a5fa'], 'fill-opacity': ['case', ['==', ['get', 'status'], 'lost'], 0.16, 0.48] } })
       map.addLayer({ id: 'patch-outline', type: 'line', source: 'patches', filter: ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]], paint: { 'line-color': ['match', ['get', 'status'], 'active', '#22d3ee', 'occluded', '#fbbf24', 'stranded', '#fb923c', 'lost', '#9ca3af', '#60a5fa'], 'line-width': ['case', ['==', ['get', 'patch_id'], selectedId ?? ''], 2.6, 1.2], 'line-dasharray': ['case', ['==', ['get', 'status'], 'occluded'], ['literal', [2, 2]], ['literal', [1, 0]]] } })
-      map.addLayer({ id: 'patch-points', type: 'circle', source: 'patches', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': ['case', ['==', ['get', 'patch_id'], selectedId ?? ''], 8, 6], 'circle-color': ['match', ['get', 'status'], 'active', '#22d3ee', 'occluded', '#fbbf24', 'stranded', '#fb923c', 'lost', '#a1a1aa', '#60a5fa'], 'circle-stroke-color': '#e6fdff', 'circle-stroke-width': 1.4, 'circle-opacity': ['case', ['==', ['get', 'status'], 'lost'], 0.45, 0.95] } })
-      map.addLayer({ id: 'patch-label', type: 'symbol', source: 'patches', layout: { 'text-field': ['get', 'patch_id'], 'text-size': 10, 'text-offset': [0, 1.5], 'text-allow-overlap': true }, paint: { 'text-color': '#e6fdff', 'text-halo-color': '#061114', 'text-halo-width': 1.4 } })
+      map.addLayer({ id: 'patch-points', type: 'circle', source: 'patches', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': ['case', ['==', ['get', 'patch_id'], selectedId ?? ''], 10, 7], 'circle-color': ['match', ['get', 'status'], 'active', '#22d3ee', 'occluded', '#fbbf24', 'stranded', '#fb923c', 'lost', '#a1a1aa', '#60a5fa'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2, 'circle-opacity': ['case', ['==', ['get', 'status'], 'lost'], 0.5, 0.95] } })
+      map.addLayer({ id: 'patch-label', type: 'symbol', source: 'patches', filter: ['==', ['geometry-type'], 'Point'], layout: { 'text-field': ['get', 'patch_id'], 'text-size': 11, 'text-offset': [0, 1.4], 'text-anchor': 'top', 'text-allow-overlap': true }, paint: { 'text-color': '#e6fdff', 'text-halo-color': '#061114', 'text-halo-width': 1.6 } })
       map.addLayer({ id: 'draft-fill', type: 'fill', source: 'draft-zone', paint: { 'fill-color': '#34d399', 'fill-opacity': 0.18 } })
       map.addLayer({ id: 'draft-line', type: 'line', source: 'draft-zone', paint: { 'line-color': '#34d399', 'line-width': 2, 'line-dasharray': [2, 2] } })
       map.addLayer({ id: 'draft-points', type: 'circle', source: 'draft-zone', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#34d399', 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } })
@@ -188,6 +188,8 @@ function MapPanel({
       // Register mouse events only after layers exist
       map.on('mouseenter', 'patch-fill', () => { map.getCanvas().style.cursor = 'pointer' })
       map.on('mouseleave', 'patch-fill', () => { map.getCanvas().style.cursor = handlersRef.current.drawing ? 'crosshair' : '' })
+      map.on('mouseenter', 'patch-points', () => { map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'patch-points', () => { map.getCanvas().style.cursor = handlersRef.current.drawing ? 'crosshair' : '' })
 
       setMapReady(true)
     })
@@ -214,7 +216,21 @@ function MapPanel({
 
   const patchFeatures = useMemo(() => patches.flatMap((patch) => {
     const geometry = patchGeometry(patch)
-    return geometry ? [{ type: 'Feature' as const, id: patch.patch_id, geometry, properties: { patch_id: patch.patch_id, status: patch.status, selected: patch.patch_id === selectedId } }] : []
+    if (!geometry) return []
+    const centroid = patch.latest_obs?.centroid ?? patch.centroid
+    const baseProperties = { patch_id: patch.patch_id, status: patch.status, selected: patch.patch_id === selectedId }
+    const features: Feature[] = [
+      { type: 'Feature' as const, id: patch.patch_id, geometry, properties: baseProperties } as Feature
+    ]
+    if (centroid && geometry.type !== 'Point') {
+      features.push({
+        type: 'Feature' as const,
+        id: `${patch.patch_id}-point`,
+        geometry: centroid,
+        properties: { ...baseProperties, is_point: true }
+      } as Feature)
+    }
+    return features
   }), [patches, selectedId])
   const zoneFeatures = useMemo(() => zones.flatMap((zone) => {
     const geometry = zone.geom ?? zone.geometry
@@ -299,7 +315,7 @@ function App() {
   const [fetchBusy, setFetchBusy] = useState(false)
   const [fetchMessage, setFetchMessage] = useState('')
   const [registerOpen, setRegisterOpen] = useState(false)
-  const [zoneInput, setZoneInput] = useState<ZoneInput>({ name: '', advisory: '20', warning: '50', chatId: '', email: '', webhook: '', secret: '', apiKey: '' })
+  const [zoneInput, setZoneInput] = useState<ZoneInput>({ name: '', advisory: '20', warning: '50', chatId: '', email: '', webhook: '', secret: '', apiKey: defaultZoneApiKey })
   const [drawing, setDrawing] = useState(false)
   const [draftCoords, setDraftCoords] = useState<[number, number][]>([])
   const [replayEnabled, setReplayEnabled] = useState(false)
@@ -348,8 +364,11 @@ function App() {
     }
 
     const nextErrors: string[] = []
-    if (patchResponse.status === 'fulfilled') setPatches(collectionFrom<Patch>(patchResponse.value, 'patches'))
-    else nextErrors.push(`Patches: ${patchResponse.reason instanceof Error ? patchResponse.reason.message : 'Unable to load patches'}`)
+    if (patchResponse.status === 'fulfilled') {
+      const loaded = collectionFrom<Patch>(patchResponse.value, 'patches')
+      setPatches(loaded)
+      setSelectedId((prev) => prev ?? (loaded[0]?.patch_id ?? null))
+    } else nextErrors.push(`Patches: ${patchResponse.reason instanceof Error ? patchResponse.reason.message : 'Unable to load patches'}`)
     if (zoneResponse.status === 'fulfilled') setZones(collectionFrom<Zone>(zoneResponse.value, 'zones'))
     else nextErrors.push(`Zones: ${zoneResponse.reason instanceof Error ? zoneResponse.reason.message : 'Unable to load zones'}`)
     if (freshnessResponse.status === 'fulfilled') setFreshness(freshnessResponse.value)
@@ -448,7 +467,7 @@ function App() {
       setRegisterOpen(false)
       setDrawing(false)
       setDraftCoords([])
-      setZoneInput({ name: '', advisory: '20', warning: '50', chatId: '', email: '', webhook: '', secret: '', apiKey: '' })
+      setZoneInput({ name: '', advisory: '20', warning: '50', chatId: '', email: '', webhook: '', secret: '', apiKey: defaultZoneApiKey })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Request failed'
       setErrors((old) => [...old.filter((item) => !item.startsWith('Zone registration:')), `Zone registration: ${message}`])
@@ -526,7 +545,7 @@ function App() {
             <label className="layer-control"><input type="checkbox" checked={showP50} onChange={(event) => setShowP50(event.target.checked)} />P50</label>
             <label className="layer-control"><input type="checkbox" checked={showP90} onChange={(event) => setShowP90(event.target.checked)} />P90</label>
             <label className="layer-control"><input type="checkbox" checked={showZones} onChange={(event) => setShowZones(event.target.checked)} />Zones</label>
-            <label className="layer-control" title={ndciTileUrl ? 'Indicative NDCI raster overlay' : 'Set VITE_NDCI_TILE_URL to enable the NDCI raster overlay'}><input type="checkbox" checked={showNdci} disabled={!ndciTileUrl} onChange={(event) => setShowNdci(event.target.checked)} />Indicative NDCI</label>
+            <label className="layer-control" title={ndciTileUrl ? 'Toggle Satellite & Indicative NDCI overlay' : 'Set VITE_NDCI_TILE_URL to enable the overlay'}><input type="checkbox" checked={showNdci} disabled={!ndciTileUrl} onChange={(event) => setShowNdci(event.target.checked)} />Satellite / NDCI</label>
             <button className="button button-small" onClick={() => { setRegisterOpen(true); setDraftCoords([]); setDrawing(true) }}><Plus size={14} /> Register zone</button>
           </div>
         </div>

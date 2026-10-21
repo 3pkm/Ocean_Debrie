@@ -7,6 +7,21 @@ import os
 from dataclasses import dataclass
 from typing import Dict, Any
 
+# Automatically load .env file if present in project root
+_env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+if os.path.exists(_env_file):
+    try:
+        with open(_env_file, "r", encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _v = _line.split("=", 1)
+                    _k, _v = _k.strip(), _v.strip().strip('"').strip("'")
+                    if _k and _k not in os.environ:
+                        os.environ[_k] = _v
+    except Exception:
+        pass
+
 # Environment variables
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 DATABASE_URL_UNPOOLED = os.getenv("DATABASE_URL_UNPOOLED", "")
@@ -45,21 +60,21 @@ NORM_STDS = [0.05] * 14
 TRACKING_GATE_PERCENTILE = 90.0
 TRACKING_DENSITY_FLOOR = 1e-6
 TRACKING_EPSILON = 1e-6
-TRACKING_WEIGHT_AREA = 1.0       # w_a
-TRACKING_WEIGHT_FDI = 1.0        # w_s
+TRACKING_WEIGHT_AREA = 1.0  # w_a
+TRACKING_WEIGHT_FDI = 1.0  # w_s
 
 SPLIT_MIN_AREA_RATIO = 0.5
 SPLIT_MAX_AREA_RATIO = 1.5
 SPLIT_MAX_DISTANCE_KM = 3.0
 
 # 9.3 Cloud-Aware Status
-VISIBILITY_CLEAR_THRESHOLD = 0.5   # V < 0.5 => occluded
-CLEAR_EVIDENCE_THRESHOLD = 1.5     # clear_evidence >= 1.5 => lost
-EXPIRY_DAYS = 21.0                 # unobserved > 21 days => expired
+VISIBILITY_CLEAR_THRESHOLD = 0.5  # V < 0.5 => occluded
+CLEAR_EVIDENCE_THRESHOLD = 1.5  # clear_evidence >= 1.5 => lost
+EXPIRY_DAYS = 21.0  # unobserved > 21 days => expired
 
 # 9.5 Ensemble Forecast Parameters
 ENSEMBLE_PARTICLES = 500
-FORECAST_HOURS = 168              # 7 days
+FORECAST_HOURS = 168  # 7 days
 FORECAST_TIME_STEP_HOURS = 1.0
 
 WINDAGE_MEAN = 0.02
@@ -73,7 +88,7 @@ LEEWAY_ANGLE_STD_DEG = 10.0
 CURRENT_SCALE_MEAN = 1.0
 CURRENT_SCALE_STD = 0.15
 
-DIFFUSION_COEFF_K = 10.0          # m^2 / s
+DIFFUSION_COEFF_K = 10.0  # m^2 / s
 
 PROBABILITY_HORIZONS_H = [24, 48]
 PROBABILITY_LEVELS = [0.50, 0.90]
