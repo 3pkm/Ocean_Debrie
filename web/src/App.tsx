@@ -291,6 +291,27 @@ function App() {
       apiRequest<unknown>('/api/zones'),
       apiRequest<Freshness>('/api/freshness'),
     ])
+    const isFetchFail = (res: PromiseSettledResult<unknown>) =>
+      res.status === 'rejected' && res.reason instanceof Error && res.reason.message.toLowerCase().includes('fetch')
+
+    if (isFetchFail(patchResponse) && isFetchFail(zoneResponse) && isFetchFail(freshnessResponse)) {
+      setPatches(replayPatches(0))
+      setZones([replayZone])
+      setFreshness({
+        last_scene_utc: '2026-10-21T10:30:21Z',
+        last_scene_age_hours: 3.2,
+        wind_forecast_updated_utc: '2026-10-21T12:00:00Z',
+        currents_forecast_updated_utc: '2026-10-21T12:00:00Z',
+        last_risk_refresh_utc: '2026-10-21T12:15:00Z',
+        active_patches_count: 1,
+        occluded_patches_count: 0,
+        pending_alerts_count: 0,
+      })
+      setErrors(['Backend API offline. Run `python dev_server.py` to start the backend. Displaying simulated telemetry.'])
+      setLoading(false)
+      return
+    }
+
     const nextErrors: string[] = []
     if (patchResponse.status === 'fulfilled') setPatches(collectionFrom<Patch>(patchResponse.value, 'patches'))
     else nextErrors.push(`Patches: ${patchResponse.reason instanceof Error ? patchResponse.reason.message : 'Unable to load patches'}`)
@@ -335,7 +356,11 @@ function App() {
       if (cancelled) return
       const nextErrors: string[] = []
       if (results[0].status === 'fulfilled') setForecast(results[0].value)
-      else nextErrors.push(`Forecast unavailable: ${results[0].reason instanceof Error ? results[0].reason.message : 'request failed'}`)
+      else if (results[0].reason instanceof Error && results[0].reason.message.toLowerCase().includes('fetch')) {
+        setForecast(replayForecast(0))
+      } else {
+        nextErrors.push(`Forecast unavailable: ${results[0].reason instanceof Error ? results[0].reason.message : 'request failed'}`)
+      }
       if (results[1].status === 'fulfilled') setVerification(results[1].value)
       else nextErrors.push(`Verification analytics unavailable: ${results[1].reason instanceof Error ? results[1].reason.message : 'request failed'}`)
       if (results[2].status === 'fulfilled') setDetail(results[2].value)
