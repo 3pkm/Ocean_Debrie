@@ -1,0 +1,11 @@
+{
+  "crons": [
+    { "path": "/api/cron/sweep",        "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/refresh-risk", "schedule": "30 5,11,17,23 * * *" },
+    { "path": "/api/cron/outbox",       "schedule": "*/5 * * * *" }
+  ],
+  "functions": {
+    "api/jobs/process_scene.py": { "maxDuration": 300 },
+    "api/cron/refresh_risk.py":  { "maxDuration": 300 }
+  }
+}
